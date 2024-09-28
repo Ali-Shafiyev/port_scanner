@@ -1,0 +1,102 @@
+import socket
+import threading
+import time
+from queue import Queue
+from colorama import Fore, init
+
+# Initialize Colorama for colored output
+init()
+print_lock = threading.Lock()
+
+# Get target IP address and port range from user
+target = input("Enter the target IP address: ")
+start_port = int(input("Enter the start port: "))
+end_port = int(input("Enter the end port: "))
+
+# Number of threads to use
+THREAD_COUNT = 50
+
+# Queue to manage ports to be scanned
+port_queue = Queue()
+
+def tcp_scan(port):
+    """Perform TCP port scanning."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            result = s.connect_ex((target, port))
+            with print_lock:
+                if result == 0:
+                    print(f"{Fore.GREEN}[+] TCP Port {port} is open.{Fore.RESET}")
+                    banner_grabbing(s)
+    except socket.error:
+        pass
+
+def udp_scan(port):
+    """Perform UDP port scanning."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(1)
+            s.sendto(b"\x00", (target, port))
+            response, _ = s.recvfrom(1024)
+            with print_lock:
+                print(f"{Fore.CYAN}[+] UDP Port {port} is open.{Fore.RESET}")
+    except (socket.timeout, socket.error):
+        pass
+
+def banner_grabbing(s):
+    """Grab banners from services running on open ports."""
+    try:
+        s.send(b'HEAD / HTTP/1.1\r\n\r\n')
+        banner = s.recv(1024).decode().strip()
+        if banner:
+            print(f"{Fore.YELLOW}[+] Banner: {banner}{Fore.RESET}")
+    except socket.error:
+        pass
+
+def worker():
+    """Worker function for threading."""
+    while True:
+        port = port_queue.get()
+        if port is None:
+            break
+        tcp_scan(port)
+        udp_scan(port)
+        port_queue.task_done()
+
+def main():
+    """Main function to initialize the scan."""
+    try:
+        socket.gethostbyname(target)
+        print(f"{Fore.GREEN}[+] Target is up: {target}{Fore.RESET}")
+    except socket.error:
+        print(f"{Fore.RED}[-] Unable to resolve {target}. Exiting.{Fore.RESET}")
+        return
+
+    start_time = time.time()
+
+    # Fill the queue with ports to be scanned
+    for port in range(start_port, end_port + 1):
+        port_queue.put(port)
+
+    # Create and start threads
+    threads = []
+    for _ in range(THREAD_COUNT):
+        t = threading.Thread(target=worker)
+        t.start()
+        threads.append(t)
+
+    # Wait for the queue to be empty
+    port_queue.join()
+
+    # Stop threads
+    for _ in range(THREAD_COUNT):
+        port_queue.put(None)
+    for t in threads:
+        t.join()
+
+    end_time = time.time()
+    print(f"{Fore.GREEN}[+] Scan completed in {end_time - start_time:.2f} seconds.{Fore.RESET}")
+
+if __name__ == "__main__":
+    main()
